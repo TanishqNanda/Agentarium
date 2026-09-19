@@ -1,12 +1,23 @@
-import { Tool } from '../types/agent'
+import { LLMToolDeclaration } from '../types/agent'
 
-const searchWeb: Tool = {
-  name: "searchWeb",
-  description: "Search the web for any information given a query string",
-  execute: async (input: string): Promise<string> => {
-    // placeholder for now — real search later
-    return `Search results for "${input}": This is a placeholder response. Real search coming in Stage 2.`
-  }
+// the actual function — logic lives here
+export async function searchWeb(query: string): Promise<string> {
+  // placeholder — real Serper/Tavily API in Stage 2
+  return `Search results for "${query}": CSS flexbox is the modern standard. Use display:flex on parent, then align-items:center and justify-content:center.`
 }
 
-export default searchWeb
+// what you send to the LLM so it knows this tool exists
+export const searchWebDeclaration: LLMToolDeclaration = {
+  name: "searchWeb",
+  description: "Search the web for information about any topic",
+  parameters: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "The search query to look up"
+      }
+    },
+    required: ["query"]
+  }
+}

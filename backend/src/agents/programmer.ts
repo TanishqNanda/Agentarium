@@ -1,59 +1,99 @@
-import { Agent, TaskResult } from '../types/agent'
-import searchWeb from '../tools/searchWeb'
+import { Agent, TaskResult, LLMToolDeclaration } from '../types/agent'
+import { searchWeb, searchWebDeclaration } from '../tools/searchWeb'
 
-// the agent object — just data, no logic here
 export const programmerAgent: Agent = {
   id: 'programmer',
-  name: 'Alex',
+  name: 'Nerdy',
   role: 'programmer',
   status: 'idle',
-  tools: [searchWeb],
+  tools: [],
   currentTask: null
 }
 
-export async function runProgrammerAgent(goal: string): Promise<TaskResult> {
+const toolExecutors: Record<string, (input: string) => Promise<string>> = {
+  searchWeb: searchWeb
+}
 
-  // update agent state
+const registeredTools: LLMToolDeclaration[] = [searchWebDeclaration]
+
+const LLM_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`
+
+async function callLLM(contents: object[]): Promise<any> {
+  const response = await fetch(LLM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents,
+      tools: [{ function_declarations: registeredTools }]
+    })
+  })
+
+  if (!response.ok) {
+    throw new Error(`LLM request failed: ${response.status} ${response.statusText}`)
+  }
+
+  const data = await response.json()
+  return data.candidates[0].content.parts[0]
+}
+
+export async function runProgrammerAgent(goal: string): Promise<TaskResult> {
   programmerAgent.status = 'thinking'
   programmerAgent.currentTask = goal
 
-  // direct fetch to Gemini AI Studio — no SDK
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
+  const steps: string[] = []
+  steps.push(`Goal received: ${goal}`)
+
+  const conversation = [
     {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `You are Alex, a programmer AI agent. Your goal: ${goal}. Be concise and technical.`
-              }
-            ]
-          }
-        ]
-      })
+      role: 'user',
+      parts: [{ text: `You are Nerdy, a programmer AI agent. Goal: ${goal}` }]
     }
-  )
+  ]
 
-  // response.json() gives you the raw Gemini response object
-  // the actual text is buried inside this nested structure
-  const data = await response.json()
-  const result: string = data.candidates[0].content.parts[0].text
+  const initialResponse = await callLLM(conversation)
 
-  // TS types — result is string, we told TS that above
+  let finalResult: string
+
+  if (initialResponse.functionCall) {
+    const toolName: string = initialResponse.functionCall.name
+    const toolInput: string = initialResponse.functionCall.args.query
+
+    steps.push(`Tool called: ${toolName} — input: "${toolInput}"`)
+
+    const executor = toolExecutors[toolName]
+    if (!executor) throw new Error(`Tool "${toolName}" not found in executor map`)
+
+    const toolOutput = await executor(toolInput)
+    steps.push(`Tool executed successfully`)
+
+    const toolResultResponse = await callLLM([
+      ...conversation,
+      {
+        role: 'model',
+        parts: [{ functionCall: { name: toolName, args: { query: toolInput } } }]
+      },
+      {
+        role: 'user',
+        parts: [{ functionResponse: { name: toolName, response: { result: toolOutput } } }]
+      }
+    ])
+
+    finalResult = toolResultResponse.text
+    steps.push(`Final answer generated using tool output`)
+
+  } else {
+    finalResult = initialResponse.text
+    steps.push(`LLM answered directly without tool`)
+  }
+
   programmerAgent.status = 'done'
   programmerAgent.currentTask = null
 
-  // this shape must match TaskResult interface you wrote
   return {
     agentId: 'programmer',
     goal,
-    result,
-    steps: ['Received goal', 'Called Gemini', 'Got response'],
+    result: finalResult,
+    steps,
     completedAt: new Date()
   }
 }

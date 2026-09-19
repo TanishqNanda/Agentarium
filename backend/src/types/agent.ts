@@ -30,3 +30,18 @@ export interface TaskResult {
   steps: string[]
   completedAt: Date
 }
+
+export interface LLMToolParameter {
+  type: string
+  description: string
+}
+
+export interface LLMToolDeclaration {
+  name: string
+  description: string
+  parameters: {
+    type: "object"
+    properties: Record<string, LLMToolParameter>
+    required: string[]
+  }
+}
