@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { runProgrammerAgent } from '../agents/programmer'
+import { callLLM } from '../agents/programmer'
 
 const router = Router()
 
@@ -18,10 +18,11 @@ router.post('/:agentId/task', async (req: Request, res: Response) => {
   }
 
   try {
-    const result = await runProgrammerAgent(goal)
+    const result = await callLLM(goal)
     res.json(result)
   } catch (err) {
-    res.status(500).json({ error: 'Agent failed', details: err })
+    console.error("Route error:", err)
+    res.status(500).json({ error: 'Agent failed', details: String(err) })
   }
 })
 

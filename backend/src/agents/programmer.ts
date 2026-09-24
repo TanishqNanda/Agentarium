@@ -1,99 +1,95 @@
 import { Agent, TaskResult, LLMToolDeclaration } from '../types/agent'
 import { searchWeb, searchWebDeclaration } from '../tools/searchWeb'
 
-export const programmerAgent: Agent = {
-  id: 'programmer',
-  name: 'Nerdy',
-  role: 'programmer',
-  status: 'idle',
-  tools: [],
-  currentTask: null
+export async function callLLM(goal : string ) : Promise<string> {
+  const API_KEY = process.env.GEMINI_API_KEY
+  const LLM_URL: string = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`                                                                                                          
+  
+  const tools : Array<LLMToolDeclaration> = [
+  searchWebDeclaration
+  ]
+  
+  const toolCallerObject: Record<string, (args: any) => Promise<unknown>> = {
+  "searchWeb" : searchWeb
 }
 
-const toolExecutors: Record<string, (input: string) => Promise<string>> = {
-  searchWeb: searchWeb
-}
-
-const registeredTools: LLMToolDeclaration[] = [searchWebDeclaration]
-
-const LLM_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`
-
-async function callLLM(contents: object[]): Promise<any> {
-  const response = await fetch(LLM_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents,
-      tools: [{ function_declarations: registeredTools }]
-    })
-  })
-
-  if (!response.ok) {
-    throw new Error(`LLM request failed: ${response.status} ${response.statusText}`)
-  }
-
-  const data = await response.json()
-  return data.candidates[0].content.parts[0]
-}
-
-export async function runProgrammerAgent(goal: string): Promise<TaskResult> {
-  programmerAgent.status = 'thinking'
-  programmerAgent.currentTask = goal
-
-  const steps: string[] = []
-  steps.push(`Goal received: ${goal}`)
-
-  const conversation = [
+  const contents: any[] = [
     {
-      role: 'user',
-      parts: [{ text: `You are Nerdy, a programmer AI agent. Goal: ${goal}` }]
-    }
+      role: "user",
+      parts: [{ text: goal }],
+    },
   ]
 
-  const initialResponse = await callLLM(conversation)
+  //---------REact loop starts---------
+  for (let i = 0; i < 10; i++) {
+    console.log("---- iteration", i, "----")
 
-  let finalResult: string
-
-  if (initialResponse.functionCall) {
-    const toolName: string = initialResponse.functionCall.name
-    const toolInput: string = initialResponse.functionCall.args.query
-
-    steps.push(`Tool called: ${toolName} — input: "${toolInput}"`)
-
-    const executor = toolExecutors[toolName]
-    if (!executor) throw new Error(`Tool "${toolName}" not found in executor map`)
-
-    const toolOutput = await executor(toolInput)
-    steps.push(`Tool executed successfully`)
-
-    const toolResultResponse = await callLLM([
-      ...conversation,
-      {
-        role: 'model',
-        parts: [{ functionCall: { name: toolName, args: { query: toolInput } } }]
+    const payload = {
+      systemInstruction: {
+        parts: [{ text: `You are Nerdy, a programmer agent.
+  When the user asks about anything current, external, or that you
+  are not 100% certain about, you MUST call the searchWeb tool instead
+  of answering from memory.` }],
       },
-      {
-        role: 'user',
-        parts: [{ functionResponse: { name: toolName, response: { result: toolOutput } } }]
+      contents: contents,
+      tools: [
+        { functionDeclarations: tools }
+      ] ,
+      generationConfig: {
+        thinkingConfig: {
+          thinkingLevel: 'medium',
+        },
+        maxOutputTokens: 1000,
+      },
+    };
+
+    try {
+      const response = await fetch(LLM_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      const body = await response.json()
+      console.log("Gemini response:", JSON.stringify(body, null, 2))
+
+      const part = body.candidates?.[0]?.content?.parts?.[0]
+
+      if (!part) {
+        console.error("No part in response:", JSON.stringify(body, null, 2))
+        throw new Error("Malformed response from Gemini")
       }
-    ])
 
-    finalResult = toolResultResponse.text
-    steps.push(`Final answer generated using tool output`)
+      if (part.text) {
+        console.log(`Text is ${part.text}`)
+        return part.text      
+      }
 
-  } else {
-    finalResult = initialResponse.text
-    steps.push(`LLM answered directly without tool`)
+      if (part.functionCall) {
+        console.log("Function call is ", part.functionCall.name)
+
+        const fn = toolCallerObject[part.functionCall.name]
+        if (!fn) {
+          console.error("Unknown tool:", part.functionCall.name)
+          throw new Error(`Unknown tool: ${part.functionCall.name}`)
+        }
+
+        const result = await fn(part.functionCall.args)
+        console.log("Tool result:", result)
+
+        contents.push({ role: "model", parts: [part] })
+        contents.push({ role: "user", parts: [{ functionResponse: { name: part.functionCall.name, response: { result: result } } }] })
+
+        continue
+      }
+
+      return "no text, no function call"
+    } catch (err) {
+      console.error("callLLM iteration failed at i =", i)
+      console.error("Full error:", err)
+      throw err
+    }
   }
 
-  programmerAgent.status = 'done'
-  programmerAgent.currentTask = null
-
-  return {
-    agentId: 'programmer',
-    goal,
-    result: finalResult,
-    steps,
-    completedAt: new Date()
-  }
+  return "hit max steps"
 }
